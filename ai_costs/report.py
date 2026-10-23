@@ -7,7 +7,7 @@ TOKEN_FIELDS = (
 )
 # Reasoning/thinking is part of output_tokens and therefore not billed twice.
 BILLED_FIELDS = TOKEN_FIELDS[:-1]
-PROVIDER_NAMES = dict(codex="Codex", claude="Claude")
+PROVIDER_NAMES = dict(codex="Codex", claude="Claude", pi="Pi")
 GROUP_TITLES = dict(day="Day", week="Week", month="Month")
 
 
@@ -98,6 +98,8 @@ def diagnostics(report):
         notes.append(f"{report['counter_resets']} reset(s) of cumulative token counters detected")
     if report.get("assumed_5m_cache_events"):
         notes.append(f"{report['assumed_5m_cache_events']} cache write(s) without TTL priced as 5-minute cache")
+    if report.get("unattributed_usage_events"):
+        notes.append(f"{report['unattributed_usage_events']} usage record(s) without provider/model attribution; cost is incomplete")
     unpriced = [row["model"] for row in report["models"] if row["cost_usd"] is None]
     if unpriced:
         notes.append(f"no price for {', '.join(unpriced)}; total cost is incomplete")

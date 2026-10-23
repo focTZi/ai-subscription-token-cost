@@ -7,6 +7,7 @@ from helpers import LogTestCase
 from ai_costs import cli, dates
 from test_claude import dated
 from test_codex import token_count
+from test_pi import assistant as pi_assistant
 
 
 class PeriodTest(LogTestCase):
@@ -40,9 +41,10 @@ class PeriodTest(LogTestCase):
 class InteractiveTest(LogTestCase):
     def test_menus_use_defaults_and_retry(self):
         out = io.StringIO()
-        self.assertEqual(cli.ask_provider("both", io.StringIO("\n"), out), "both")
-        self.assertEqual(cli.ask_provider("both", io.StringIO("x\n9\n3\n"), out), "claude")
-        self.assertIn("between 1 and 3", out.getvalue())
+        self.assertEqual(cli.ask_provider("all", io.StringIO("\n"), out), "all")
+        self.assertEqual(cli.ask_provider("all", io.StringIO("x\n9\n3\n"), out), "claude")
+        self.assertEqual(cli.ask_provider("all", io.StringIO("4\n"), out), "pi")
+        self.assertIn("between 1 and 4", out.getvalue())
         today = date(2026, 11, 12)
         p = cli.ask_period(today, io.StringIO("\n"), out)
         self.assertEqual((p.start, p.end), (date(2026, 10, 14), today))
@@ -50,7 +52,7 @@ class InteractiveTest(LogTestCase):
         self.assertEqual((p.start, p.end), (date(2026, 11, 1), today))
         self.assertEqual(cli.ask_group(io.StringIO("4\n"), out), "month")
         with self.assertRaises(KeyboardInterrupt):
-            cli.ask_provider("both", io.StringIO(""), out)
+            cli.ask_provider("all", io.StringIO(""), out)
 
 
 class CommandLineTest(LogTestCase):
@@ -59,6 +61,8 @@ class CommandLineTest(LogTestCase):
         self.env = dict(os.environ, HOME=str(self.path))
         self.env.pop("CODEX_HOME", None)
         self.env.pop("CLAUDE_CONFIG_DIR", None)
+        self.env.pop("PI_CODING_AGENT_DIR", None)
+        self.env.pop("PI_CODING_AGENT_SESSION_DIR", None)
         self.today = dates.local_today()
         self.start = self.today - timedelta(days=29)
         old = self.start - timedelta(days=1)
@@ -68,7 +72,7 @@ class CommandLineTest(LogTestCase):
             usage=dict(input_tokens=10, output_tokens=1))])
         self.write(".claude/projects/claude.jsonl", [dated(f"{old}T12:00:00Z", "old"), dated(f"{self.today}T12:00:00Z", "today")])
 
-    def test_defaults_last_30_days_both_providers(self):
+    def test_defaults_last_30_days_detected_tools(self):
         r = json.loads(self.run_cli("--json", env=self.env, check=True).stdout)
         self.assertEqual(r["period"]["from_date"], str(self.start))
         self.assertEqual(r["providers"]["codex"]["totals"]["total_tokens"], 1111)
@@ -134,7 +138,48 @@ class CommandLineTest(LogTestCase):
     def test_argument_errors(self):
         for args in (("--period", "soon"), ("--from", "2026-02-30"), ("--from", "2026-11-03", "--to", "2026-11-02"),
                      ("--period", "7d", "--to", "2026-11-02"), ("--period", "7d", "--from", "2026-11-01"),
-                     ("--codex-path", self.path / "missing", "-p", "codex"), ("--by", "year"), ("--invalid",)):
+                     ("--codex-path", self.path / "missing", "-p", "codex"), ("--by", "year"),
+                     ("-p", "both"), ("--invalid",)):
             result = self.run_cli("--json", *args, env=self.env)
             self.assertEqual(result.returncode, 2, args)
             self.assertEqual(result.stdout, "")
+
+    def test_pi_and_all_selection(self):
+        self.write(".pi/agent/sessions/project/pi.jsonl", [pi_assistant(timestamp=f"{self.today}T12:00:00Z")])
+        for selection in ((), ("-p", "all"), ("-p", "pi")):
+            r = json.loads(self.run_cli("--json", *selection, env=self.env, check=True).stdout)
+            expected = {"pi"} if selection == ("-p", "pi") else {"codex", "claude", "pi"}
+            self.assertEqual(set(r["providers"]), expected)
+            if "pi" in expected:
+                self.assertEqual(r["providers"]["pi"]["totals"]["total_tokens"], 360)
+        for group in ("model", "day", "week", "month"):
+            result = self.run_cli("-p", "pi", "--by", group, env=self.env, check=True)
+            self.assertIn("Pi", result.stdout)
+            self.assertIn("cache write(s) without TTL", result.stderr)
+
+    def test_pi_directory_overrides_and_explicit_paths(self):
+        path = self.write("custom/sessions/pi.jsonl", [pi_assistant(timestamp=f"{self.today}T12:00:00Z")])
+        for env in (dict(self.env, PI_CODING_AGENT_DIR=str(self.path / "custom")),
+                    dict(self.env, PI_CODING_AGENT_DIR=str(self.path / "missing"),
+                         PI_CODING_AGENT_SESSION_DIR=str(path.parent))):
+            r = json.loads(self.run_cli("--json", "-p", "pi", env=env, check=True).stdout)
+            self.assertEqual(r["totals"]["total_tokens"], 360)
+        r = json.loads(self.run_cli("--json", "--pi-path", path, "--pi-path", path.parent,
+                                    env=self.env, check=True).stdout)
+        self.assertEqual(set(r["providers"]), {"codex", "claude", "pi"})
+        self.assertEqual(r["providers"]["pi"]["files_scanned"], 1)
+        env = dict(self.env, CODEX_HOME=str(self.path / "missing"), CLAUDE_CONFIG_DIR=str(self.path / "missing"),
+                   PI_CODING_AGENT_SESSION_DIR=str(path.parent))
+        r = json.loads(self.run_cli("--json", env=env, check=True).stdout)
+        self.assertEqual(set(r["providers"]), {"pi"})
+
+    def test_mixed_detection_and_unattributed_usage_diagnostic(self):
+        self.write(".pi/agent/sessions/pi.jsonl", [dict(type="compaction", id="summary",
+            timestamp=f"{self.today}T12:00:00Z", usage=dict(input=10, output=2, cacheRead=0, cacheWrite=0))])
+        env = dict(self.env, CLAUDE_CONFIG_DIR=str(self.path / "missing"))
+        result = self.run_cli("--json", env=env, check=True)
+        r = json.loads(result.stdout)
+        self.assertEqual(set(r["providers"]), {"codex", "pi"})
+        self.assertEqual(r["providers"]["pi"]["totals"]["total_tokens"], 12)
+        self.assertIsNone(r["totals"]["cost_usd"])
+        self.assertIn("without provider/model attribution", result.stderr)

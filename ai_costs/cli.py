@@ -5,11 +5,11 @@ import os
 from pathlib import Path
 import sys
 
-from . import __version__, claude, codex, dates
+from . import __version__, claude, codex, dates, pi
 from .logs import LOG_SUFFIXES
 from .report import PROVIDER_NAMES, combine, diagnostics, render_table
 
-ANALYZERS = dict(codex=codex.analyze, claude=claude.analyze)
+ANALYZERS = dict(codex=codex.analyze, claude=claude.analyze, pi=pi.analyze)
 PERIOD_CHOICES = (
     ("last 30 days", lambda today: dates.last_days(30, today)),
     ("last 7 days", lambda today: dates.last_days(7, today)),
@@ -21,13 +21,16 @@ PERIOD_CHOICES = (
 
 
 def default_paths(provider):
-    """Default log locations; CODEX_HOME and CLAUDE_CONFIG_DIR are honored."""
+    """Default log locations, honoring each tool's directory overrides."""
     if provider == "codex":
         root = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
         candidates = (root / "sessions", root / "archived_sessions")
-    else:
+    elif provider == "claude":
         root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
         candidates = (root / "projects",)
+    else:
+        root = Path(os.environ.get("PI_CODING_AGENT_DIR") or Path.home() / ".pi" / "agent").expanduser()
+        candidates = (Path(os.environ.get("PI_CODING_AGENT_SESSION_DIR") or root / "sessions").expanduser(),)
     return [p for p in candidates if p.exists()]
 
 
@@ -39,11 +42,11 @@ def installed_providers():
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="ai-costs",
-        description="Estimate what your local Codex and Claude Code usage would cost at API list prices. "
+        description="Estimate what your local Codex, Claude Code and Pi usage would cost at API list prices. "
                     "Reads local log files only; nothing is sent anywhere.",
         epilog="Run without --provider, --period/--from/--to and --by, ai-costs asks for them in a terminal. "
                "Days are calendar days in the system time zone (set TZ to change it) and inclusive.")
-    parser.add_argument("-p", "--provider", choices=("both", "codex", "claude"),
+    parser.add_argument("-p", "--provider", choices=("all", "codex", "claude", "pi"),
                         help="which logs to analyze (default: every provider with local logs)")
     when = parser.add_mutually_exclusive_group()
     when.add_argument("--period", metavar="PERIOD",
@@ -58,6 +61,8 @@ def build_parser():
                         help="Codex log directory or file (repeatable; default: ~/.codex/sessions and archived_sessions)")
     parser.add_argument("--claude-path", action="append", type=Path, metavar="PATH",
                         help="Claude Code log directory or file (repeatable; default: ~/.claude/projects)")
+    parser.add_argument("--pi-path", action="append", type=Path, metavar="PATH",
+                        help="Pi log directory or file (repeatable; default: ~/.pi/agent/sessions)")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return parser
 
@@ -99,8 +104,8 @@ def ask_date(prompt, default, inp=sys.stdin, out=sys.stderr):
 
 
 def ask_provider(default, inp=sys.stdin, out=sys.stderr):
-    options = ["Codex and Claude", "Codex only", "Claude only"]
-    values = ["both", "codex", "claude"]
+    options = ["All locally detected tools", "Codex only", "Claude only", "Pi only"]
+    values = ["all", "codex", "claude", "pi"]
     return values[choose("Which usage do you want to analyze?", options, values.index(default), inp, out)]
 
 
@@ -159,10 +164,10 @@ def main(argv=None):
     except ValueError as error:
         parser.error(str(error))
     detected = installed_providers()
-    provider = args.provider or ("both" if len(detected) > 1 else detected[0])
+    provider = args.provider or ("all" if len(detected) > 1 else detected[0])
     group = args.by or "model"
     # Ask only when nothing was chosen on the command line; any option means "use defaults for the rest".
-    chosen = args.provider or period or args.by
+    chosen = args.provider or period or args.by or args.codex_path or args.claude_path or args.pi_path
     if not chosen and not args.no_input and sys.stdin.isatty() and sys.stderr.isatty():
         try:
             provider = ask_provider(provider)
@@ -174,7 +179,12 @@ def main(argv=None):
             return 130
     period = period or dates.last_days(30, today)
 
-    selected = list(ANALYZERS) if provider == "both" else [provider]
+    if provider == "all":
+        selected = list(ANALYZERS) if args.provider == "all" else detected
+    else:
+        selected = [provider]
+    if not args.provider:
+        selected = [name for name in ANALYZERS if name in selected or getattr(args, f"{name}_path")]
     reports = {}
     for name in selected:
         paths = resolve_paths(name, getattr(args, f"{name}_path"), parser)

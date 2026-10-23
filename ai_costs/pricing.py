@@ -64,3 +64,16 @@ def claude_prices(model):
     return dict(uncached_input_tokens=p[0], cached_input_tokens=p[1],
                 cache_creation_5m_input_tokens=p[0] * 1.25,
                 cache_creation_1h_input_tokens=p[0] * 2, output_tokens=p[2])
+
+
+PI_PRICING = dict(sources=[CODEX_PRICING, CLAUDE_PRICING],
+                  basis="API list prices by Pi provider/model; logged usage.cost is ignored")
+
+
+def pi_prices(model):
+    provider, _, name = model.partition("/")
+    if provider == "anthropic":
+        return claude_prices(name)
+    if provider in ("openai", "openai-codex"):
+        return codex_prices(name)
+    return None
