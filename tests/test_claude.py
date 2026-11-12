@@ -56,12 +56,12 @@ class ClaudeTest(LogTestCase):
 
     def test_model_ids_with_date_and_context_suffix(self):
         models = ["claude-opus-5-5[1m]", "claude-sonnet-5-5", "claude-sonnet-4-6",
-                  "claude-haiku-4-5-20251001"]
+                  "claude-haiku-4-5-20251001", "claude-fable-5-2"]
         self.write("models.jsonl", [assistant(str(i), m) for i, m in enumerate(models)])
         r = self.analyze()
-        self.assertEqual(r["usage_events"], 4)
+        self.assertEqual(r["usage_events"], 5)
         self.assertTrue(r["totals"]["pricing_complete"])
-        self.assertAlmostEqual(r["totals"]["cost_usd"], .0015)
+        self.assertAlmostEqual(r["totals"]["cost_usd"], .0027)
 
     def test_invalid_records_synthetic_and_conversation_content(self):
         invalid = assistant("bad", cache_creation_input_tokens=5, cache_creation=dict(ephemeral_5m_input_tokens=6))

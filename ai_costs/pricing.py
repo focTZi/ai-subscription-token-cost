@@ -27,6 +27,8 @@ CLAUDE_PRICING = dict(
 )
 # Claude Haiku 5.5 is missing on purpose: its price depends on each prompt's size.
 CLAUDE_PRICES = {  # model: (input, cache read, output)
+    "claude-fable-5-2": (8, 0.20, 40),
+    "claude-mythos-5-2": (8, 0.20, 40),
     "claude-fable-5-1": (10, 0.25, 50),
     "claude-mythos-5-1": (10, 0.25, 50),
     "claude-fable-5": (10, 1, 50),
