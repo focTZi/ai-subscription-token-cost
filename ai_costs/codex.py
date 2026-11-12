@@ -7,7 +7,7 @@ resumed or repeated snapshot is never counted twice.
 import sys
 
 from . import logs
-from .dates import parse_timestamp
+from .dates import local_day, parse_timestamp
 from .pricing import CODEX_PRICING, codex_prices
 from .report import finalize, new_report, zero
 
@@ -110,21 +110,22 @@ def _has_cumulative_counts(file):
 
 
 def _scan(file, prefer_counts, period):
-    state = dict(models={}, usage_events=0, invalid_records=0, duplicate_snapshots=0, counter_resets=0,
+    state = dict(usage={}, usage_events=0, invalid_records=0, duplicate_snapshots=0, counter_resets=0,
                  skipped_undated_usage_events=0, filtered_usage_events=0)
     model, previous = "unknown", None
 
     def add(usage, record):
+        moment = parse_timestamp(record.get("timestamp"))
+        day = local_day(moment) if moment else None
         if period.active:
-            moment = parse_timestamp(record.get("timestamp"))
-            if moment is None:
+            if day is None:
                 state["skipped_undated_usage_events"] += 1
                 return
-            if not period.contains(moment):
+            if not period.contains(day):
                 state["filtered_usage_events"] += 1
                 return
         state["usage_events"] += 1
-        row = state["models"].setdefault(model, zero())
+        row = state["usage"].setdefault((model, day), zero())
         row["uncached_input_tokens"] += usage["input"] - usage["cached"]
         row["cached_input_tokens"] += usage["cached"]
         row["output_tokens"] += usage["output"]
@@ -176,9 +177,9 @@ def _scan(file, prefer_counts, period):
     return state
 
 
-def analyze(paths, period):
+def analyze(paths, period, group="model"):
     report = new_report("codex", paths, period, CODEX_PRICING, duplicate_snapshots=0, counter_resets=0)
-    models = {}
+    usage = {}
     for file in logs.find_files(paths):
         report["files_scanned"] += 1
         try:
@@ -187,10 +188,10 @@ def analyze(paths, period):
             report["files_failed"] += 1
             print(f"ai-costs: warning: codex: skipped {file} ({type(error).__name__})", file=sys.stderr)
             continue
-        for name, counts in state.pop("models").items():
-            row = models.setdefault(name, zero())
+        for key, counts in state.pop("usage").items():
+            row = usage.setdefault(key, zero())
             for field, count in counts.items():
                 row[field] += count
         for counter, count in state.items():
             report[counter] += count
-    return finalize(report, models, codex_prices)
+    return finalize(report, usage, codex_prices, group)

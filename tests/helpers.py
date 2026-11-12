@@ -1,12 +1,17 @@
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+# Expected day boundaries in the tests are UTC; subprocesses inherit this.
+os.environ["TZ"] = "UTC"
+time.tzset()
 
 
 class LogTestCase(unittest.TestCase):

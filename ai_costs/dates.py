@@ -1,4 +1,4 @@
-"""UTC calendar-day periods and log timestamp parsing."""
+"""Calendar-day periods in the system time zone, and log timestamp parsing."""
 from datetime import date, datetime, timedelta, timezone
 import re
 
@@ -42,8 +42,36 @@ def parse_timestamp(value):
         return None
 
 
+GROUPS = ("model", "day", "week", "month")
+
+
+def local_day(moment):
+    """Calendar day of an aware datetime in the system time zone (honors $TZ)."""
+    return moment.astimezone().date()
+
+
+def local_today():
+    return datetime.now().astimezone().date()
+
+
+def timezone_name():
+    return datetime.now().astimezone().tzname() or "local time"
+
+
+def bucket(day, group):
+    """Label of the day/ISO week/month a calendar day belongs to."""
+    if day is None:
+        return "undated"
+    if group == "week":
+        year, week, _ = day.isocalendar()
+        return f"{year}-W{week:02d}"
+    if group == "month":
+        return day.strftime("%Y-%m")
+    return day.isoformat()
+
+
 class Period:
-    """Inclusive range of UTC calendar days; either bound may be open."""
+    """Inclusive range of local calendar days; either bound may be open."""
 
     def __init__(self, start=None, end=None, label=None):
         if start and end and start > end:
@@ -58,13 +86,12 @@ class Period:
     def active(self):
         return self.start is not None or self.end is not None
 
-    def contains(self, moment):
-        day = moment.date()
+    def contains(self, day):
         return (self.start is None or day >= self.start) and (self.end is None or day <= self.end)
 
     def to_json(self):
         return dict(label=self.label, from_date=self.start.isoformat() if self.start else None,
-                    to_date=self.end.isoformat() if self.end else None, timezone="UTC")
+                    to_date=self.end.isoformat() if self.end else None, timezone=timezone_name())
 
 
 def last_days(days, today):

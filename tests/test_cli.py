@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 import io
 import json
 import os
@@ -48,6 +48,7 @@ class InteractiveTest(LogTestCase):
         self.assertEqual((p.start, p.end), (date(2026, 10, 14), today))
         p = cli.ask_period(today, io.StringIO("6\n2026-11-31\n2026-11-01\n\n"), out)
         self.assertEqual((p.start, p.end), (date(2026, 11, 1), today))
+        self.assertEqual(cli.ask_group(io.StringIO("4\n"), out), "month")
         with self.assertRaises(KeyboardInterrupt):
             cli.ask_provider("both", io.StringIO(""), out)
 
@@ -58,7 +59,7 @@ class CommandLineTest(LogTestCase):
         self.env = dict(os.environ, HOME=str(self.path))
         self.env.pop("CODEX_HOME", None)
         self.env.pop("CLAUDE_CONFIG_DIR", None)
-        self.today = datetime.now(timezone.utc).date()
+        self.today = dates.local_today()
         self.start = self.today - timedelta(days=29)
         old = self.start - timedelta(days=1)
         self.write(".codex/sessions/codex.jsonl", [dict(type="turn_context", payload=dict(model="gpt-6-sol")),
@@ -104,10 +105,36 @@ class CommandLineTest(LogTestCase):
         self.assertIn("No price for: Codex future-model (11 tokens)", table)
         self.assertIn("n/a", table)
 
+    def test_system_time_zone_decides_the_day(self):
+        self.write("tz/claude.jsonl", [dated("2026-11-02T23:30:00Z", "late")])
+        args = ("--json", "-p", "claude", "--claude-path", self.path / "tz", "--from", "2026-11-03", "--to", "2026-11-03")
+        utc = json.loads(self.run_cli(*args, env=self.env, check=True).stdout)
+        berlin = json.loads(self.run_cli(*args, env=dict(self.env, TZ="Europe/Berlin"), check=True).stdout)
+        self.assertEqual((utc["totals"]["total_tokens"], berlin["totals"]["total_tokens"]), (0, 360))
+        self.assertEqual(berlin["period"]["timezone"], "CET")
+
+    def test_breakdown_by_day_week_and_month(self):
+        r = json.loads(self.run_cli("--json", "--by", "day", env=self.env, check=True).stdout)
+        self.assertEqual(r["group_by"], "day")
+        self.assertEqual([g["key"] for g in r["groups"]], sorted({str(self.start), str(self.today)}))
+        self.assertEqual(sum(g["totals"]["total_tokens"] for g in r["groups"]), r["totals"]["total_tokens"])
+        self.assertAlmostEqual(sum(g["totals"]["cost_usd"] for g in r["groups"]), r["totals"]["cost_usd"])
+        self.assertEqual(set(r["groups"][-1]["providers"]), {"codex", "claude"})
+        week = json.loads(self.run_cli("--json", "--by", "week", "--period", "all", env=self.env, check=True).stdout)
+        self.assertTrue(all("-W" in g["key"] for g in week["groups"]))
+        self.assertEqual(sum(g["totals"]["total_tokens"] for g in week["groups"]), 2931)
+        table = self.run_cli("--by", "month", env=self.env, check=True).stdout
+        for text in ("Month", "Codex (USD)", "Claude (USD)", self.today.strftime("%Y-%m"), "Total"):
+            self.assertIn(text, table)
+        undated = self.write("undated.jsonl", [dict(model="gpt-6-sol", usage=dict(input_tokens=10, output_tokens=1))])
+        r = json.loads(self.run_cli("--json", "-p", "codex", "--by", "day", "--period", "all",
+                                    "--codex-path", undated, env=self.env, check=True).stdout)
+        self.assertEqual([g["key"] for g in r["groups"]], ["undated"])
+
     def test_argument_errors(self):
         for args in (("--period", "soon"), ("--from", "2026-02-30"), ("--from", "2026-11-03", "--to", "2026-11-02"),
                      ("--period", "7d", "--to", "2026-11-02"), ("--period", "7d", "--from", "2026-11-01"),
-                     ("--codex-path", self.path / "missing", "-p", "codex"), ("--invalid",)):
+                     ("--codex-path", self.path / "missing", "-p", "codex"), ("--by", "year"), ("--invalid",)):
             result = self.run_cli("--json", *args, env=self.env)
             self.assertEqual(result.returncode, 2, args)
             self.assertEqual(result.stdout, "")

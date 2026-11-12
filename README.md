@@ -19,8 +19,14 @@ Which period?
   5) all time
   6) custom range
 Choose 1-6 [1]:
+How should costs be broken down?
+  1) by model  (default)
+  2) by day
+  3) by week
+  4) by month
+Choose 1-4 [1]:
 
-Estimated API cost, last 30 days: 2026-10-14 to 2026-11-12 (UTC)
+Estimated API cost, last 30 days: 2026-10-14 to 2026-11-12 (CET)
 
 Provider  Model               Input  Cache read  Cache write   Output    Total  Cost (USD)
 --------  -----------------  ------  ----------  -----------  -------  -------  ----------
@@ -51,7 +57,7 @@ git clone <this repository> && cd ai-costs
 
 Or install it as a command with `pipx install .` (or `pip install .`).
 
-In a terminal, `ai-costs` asks for anything you did not pass as an option. Press Enter to accept the defaults. With `-y`, or when input is not a terminal (cron, CI, pipes), it never asks.
+Run without options in a terminal, `ai-costs` asks what to analyze; press Enter to accept the defaults. As soon as you pass `-p`, a period or `--by`, it uses the defaults for everything else instead of asking. With `-y`, or when input is not a terminal (cron, CI, pipes), it never asks.
 
 ```bash
 ai-costs -y                          # both providers, last 30 days
@@ -59,6 +65,8 @@ ai-costs -p claude --period 7d       # Claude Code, last 7 days
 ai-costs --period last-month
 ai-costs --period 2026-10            # one calendar month
 ai-costs --from 2026-10-01 --to 2026-10-15
+ai-costs --by day                    # costs per day, last 30 days
+ai-costs --by month --period all
 ai-costs --period all --json > costs.json
 ```
 
@@ -67,11 +75,12 @@ ai-costs --period all --json > costs.json
 | `-p`, `--provider` | `both`, `codex` or `claude`. Default: every provider that has logs on this machine. |
 | `--period` | `30d` (default), `7d`, any `Nd`, `this-month`, `last-month`, `YYYY-MM` or `all` |
 | `--from`, `--to` | Custom range. Both days are included, and either one may be left out. |
-| `--json` | Full report, including per-model prices and diagnostic counters |
+| `--by` | `model` (default), `day`, `week` (ISO weeks) or `month` |
+| `--json` | Full report, including per-model prices, groups and diagnostic counters |
 | `-y`, `--no-input` | Never ask |
 | `--codex-path`, `--claude-path` | Other log directories or single `.json`/`.jsonl` files (repeatable) |
 
-Days are UTC calendar days. Warnings go to stderr, so `--json` output stays valid.
+Days are calendar days in the system time zone; set `TZ` to use another one (`TZ=UTC ai-costs`). Warnings go to stderr, so `--json` output stays valid.
 
 ### Where the logs are read from
 

@@ -7,7 +7,7 @@ across all files before it is counted.
 import sys
 
 from . import logs
-from .dates import parse_timestamp
+from .dates import local_day, parse_timestamp
 from .pricing import CLAUDE_PRICING, claude_prices
 from .report import TOKEN_FIELDS, finalize, new_report, zero
 
@@ -59,7 +59,7 @@ def _rank(snapshot):
             usage["reasoning_tokens"], moment is not None)
 
 
-def analyze(paths, period):
+def analyze(paths, period, group="model"):
     report = new_report("claude", paths, period, CLAUDE_PRICING, duplicate_snapshots=0,
                         updated_snapshots=0, recovered_partial_snapshots=0,
                         assumed_5m_cache_events=0, skipped_synthetic_records=0)
@@ -80,21 +80,22 @@ def analyze(paths, period):
         key = "recovered_partial_snapshots" if ("message", message_id) in snapshots else "invalid_records"
         report[key] += count
 
-    models = {}
+    totals = {}
     for model, usage, assumed, moment in snapshots.values():
+        day = local_day(moment) if moment else None
         if period.active:
-            if moment is None:
+            if day is None:
                 report["skipped_undated_usage_events"] += 1
                 continue
-            if not period.contains(moment):
+            if not period.contains(day):
                 report["filtered_usage_events"] += 1
                 continue
         report["usage_events"] += 1
         report["assumed_5m_cache_events"] += int(assumed)
-        row = models.setdefault(model, zero())
+        row = totals.setdefault((model, day), zero())
         for field in TOKEN_FIELDS:
             row[field] += usage[field]
-    return finalize(report, models, claude_prices)
+    return finalize(report, totals, claude_prices, group)
 
 
 def _read_record(record, report, snapshots, placeholders, position):

@@ -1,6 +1,5 @@
 """Command line interface: asks for provider and period when run in a terminal."""
 import argparse
-from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -42,8 +41,8 @@ def build_parser():
         prog="ai-costs",
         description="Estimate what your local Codex and Claude Code usage would cost at API list prices. "
                     "Reads local log files only; nothing is sent anywhere.",
-        epilog="Without --provider or a period, ai-costs asks interactively when run in a terminal. "
-               "Dates are UTC calendar days and inclusive.")
+        epilog="Run without --provider, --period/--from/--to and --by, ai-costs asks for them in a terminal. "
+               "Days are calendar days in the system time zone (set TZ to change it) and inclusive.")
     parser.add_argument("-p", "--provider", choices=("both", "codex", "claude"),
                         help="which logs to analyze (default: every provider with local logs)")
     when = parser.add_mutually_exclusive_group()
@@ -51,6 +50,8 @@ def build_parser():
                       help="30d (default), 7d, any Nd, this-month, last-month, YYYY-MM or all")
     when.add_argument("--from", dest="from_date", metavar="YYYY-MM-DD", help="first day to include")
     parser.add_argument("--to", dest="to_date", metavar="YYYY-MM-DD", help="last day to include")
+    parser.add_argument("--by", choices=dates.GROUPS,
+                        help="break costs down by model (default), day, week (ISO) or month")
     parser.add_argument("--json", action="store_true", help="print the full report as JSON")
     parser.add_argument("-y", "--no-input", action="store_true", help="never ask; use defaults for anything not given")
     parser.add_argument("--codex-path", action="append", type=Path, metavar="PATH",
@@ -118,6 +119,11 @@ def ask_period(today, inp=sys.stdin, out=sys.stderr):
             out.write(f"{error}\n")
 
 
+def ask_group(inp=sys.stdin, out=sys.stderr):
+    options = ["by model", "by day", "by week", "by month"]
+    return dates.GROUPS[choose("How should costs be broken down?", options, 0, inp, out)]
+
+
 def period_from_args(args, today):
     if args.period:
         if args.to_date:
@@ -147,34 +153,35 @@ def resolve_paths(provider, given, parser):
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
-    today = datetime.now(timezone.utc).date()
+    today = dates.local_today()
     try:
         period = period_from_args(args, today)
     except ValueError as error:
         parser.error(str(error))
-    interactive = not args.no_input and sys.stdin.isatty() and sys.stderr.isatty()
-    provider = args.provider
-    try:
-        detected = installed_providers()
-        default_provider = "both" if len(detected) > 1 else detected[0]
-        if provider is None:
-            provider = ask_provider(default_provider) if interactive else default_provider
-        if period is None:
-            period = ask_period(today) if interactive else dates.last_days(30, today)
-        if interactive and (args.provider is None or not (args.period or args.from_date or args.to_date)):
+    detected = installed_providers()
+    provider = args.provider or ("both" if len(detected) > 1 else detected[0])
+    group = args.by or "model"
+    # Ask only when nothing was chosen on the command line; any option means "use defaults for the rest".
+    chosen = args.provider or period or args.by
+    if not chosen and not args.no_input and sys.stdin.isatty() and sys.stderr.isatty():
+        try:
+            provider = ask_provider(provider)
+            period = ask_period(today)
+            group = ask_group()
             sys.stderr.write("\n")
-    except KeyboardInterrupt:
-        sys.stderr.write("\n")
-        return 130
+        except KeyboardInterrupt:
+            sys.stderr.write("\n")
+            return 130
+    period = period or dates.last_days(30, today)
 
     selected = list(ANALYZERS) if provider == "both" else [provider]
     reports = {}
     for name in selected:
         paths = resolve_paths(name, getattr(args, f"{name}_path"), parser)
-        reports[name] = ANALYZERS[name](paths, period)
+        reports[name] = ANALYZERS[name](paths, period, group)
         for note in diagnostics(reports[name]):
             print(f"ai-costs: {PROVIDER_NAMES[name]}: {note}", file=sys.stderr)
-    combined = combine(reports, period)
+    combined = combine(reports, period, group)
     if args.json:
         print(json.dumps(combined, indent=2, allow_nan=False))
     else:
