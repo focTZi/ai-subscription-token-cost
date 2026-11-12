@@ -1,8 +1,20 @@
 # ai-costs
 
-How much would your Codex and Claude Code usage cost if you paid API prices instead of a subscription?
+Estimate what your Codex and Claude Code usage would cost at API prices.
 
-`ai-costs` reads the session logs that the [Codex CLI](https://github.com/openai/codex) and [Claude Code](https://code.claude.com) already keep on your machine. It adds up the tokens per model and prices them at the public pay-as-you-go API rates. Nothing is sent anywhere, and the logs are never modified.
+```bash
+git clone https://github.com/focTZi/ai-subscription-token-cost.git
+cd ai-subscription-token-cost
+./ai-costs
+```
+
+You need Python 3.9 or newer. There are no other dependencies. Press Enter at each prompt to analyze both providers over the last 30 days, grouped by model.
+
+`ai-costs` reads the local session logs from the [Codex CLI](https://github.com/openai/codex) and [Claude Code](https://code.claude.com), adds up the tokens per model and applies public pay-as-you-go API rates. Your logs stay on your machine and are never modified.
+
+## Example
+
+The numbers in this example are made up.
 
 ```
 $ ./ai-costs
@@ -42,22 +54,11 @@ Total = input + cache read + cache write + output; reasoning is part of output.
 Estimate at pay-as-you-go API list prices, not an actual bill.
 ```
 
-The numbers in this example are made up.
-
-## Requirements
-
-Python 3.9 or newer. There are no other dependencies.
-
 ## Usage
 
-```bash
-git clone <this repository> && cd ai-costs
-./ai-costs
-```
+To install `ai-costs` as a command, run `pipx install .` (or `pip install .`) from the repository directory.
 
-Or install it as a command with `pipx install .` (or `pip install .`).
-
-Run without options in a terminal, `ai-costs` asks what to analyze; press Enter to accept the defaults. As soon as you pass `-p`, a period or `--by`, it uses the defaults for everything else instead of asking. With `-y`, or when input is not a terminal (cron, CI, pipes), it never asks.
+Without options, `ai-costs` asks what to analyze. Press Enter to accept a default. Pass `-p`, a period or `--by` to skip the prompts and use defaults for the remaining options. It also skips prompts with `-y` or when input is not a terminal, such as in cron, CI or pipes.
 
 ```bash
 ai-costs -y                          # both providers, last 30 days
@@ -80,28 +81,28 @@ ai-costs --period all --json > costs.json
 | `-y`, `--no-input` | Never ask |
 | `--codex-path`, `--claude-path` | Other log directories or single `.json`/`.jsonl` files (repeatable) |
 
-Days are calendar days in the system time zone; set `TZ` to use another one (`TZ=UTC ai-costs`). Warnings go to stderr, so `--json` output stays valid.
+Date ranges use calendar days in your system time zone. Set `TZ` to use another one (`TZ=UTC ai-costs`). Warnings go to stderr, so `--json` output stays valid.
 
-### Where the logs are read from
+### Log locations
 
 | Provider | Default location |
 | --- | --- |
 | Codex | `~/.codex/sessions` and `~/.codex/archived_sessions` (or `$CODEX_HOME`) |
 | Claude Code | `~/.claude/projects`, including subagent transcripts (or `$CLAUDE_CONFIG_DIR`) |
 
-By default, Claude Code deletes local transcripts after 30 days (setting `cleanupPeriodDays`). Raise that setting if you want longer periods.
+Claude Code deletes local transcripts after 30 days by default. Increase `cleanupPeriodDays` if you want to keep more history.
 
 ## How it counts
 
-- **Total tokens** = input + cache read + cache write + output. Reasoning or thinking tokens are part of output and are not counted twice.
-- **Codex** logs cumulative counters. Usage is the difference between consecutive counter values within a session file. Repeated snapshots and counter resets are handled.
-- **Claude Code** logs one record per content block and copies history into subagent and resumed sessions. Usage is deduplicated by message ID across all files, and the most complete snapshot of each message is kept.
-- Only usage fields are read. Prompts, answers and tool output are ignored.
+- Total tokens = input + cache read + cache write + output. Reasoning or thinking tokens are already included in output.
+- Codex logs cumulative counters. `ai-costs` calculates usage from the difference between consecutive counter values within each session file, accounting for repeated snapshots and counter resets.
+- Claude Code logs one record per content block and copies history into subagent and resumed sessions. `ai-costs` deduplicates messages by ID across all files and keeps the most complete snapshot of each message.
+- The calculation uses only usage fields. It ignores prompts, answers and tool output.
 - Models without a known price still show their tokens. Their cost shows as `n/a`, and totals are marked with `*` (`cost_usd: null` in JSON).
 
 ## Prices
 
-The prices are fixed in [`ai_costs/pricing.py`](ai_costs/pricing.py) and were last checked on 2026-11-12:
+API rates are stored in [`ai_costs/pricing.py`](ai_costs/pricing.py) and were last checked on 2026-11-12:
 
 - OpenAI: <https://developers.openai.com/api/docs/pricing> (standard tier, short context)
 - Anthropic: <https://platform.claude.com/docs/en/about-claude/pricing> (standard rates, 5-minute and 1-hour cache writes)
@@ -110,7 +111,7 @@ Prices change. Pull requests that update them are welcome.
 
 ## Limitations
 
-This is an estimate, not a bill:
+The estimate has a few limits:
 
 - Long-context surcharges, fast mode, batch discounts, regional pricing, server-tool fees and taxes are not included.
 - Historical prices are not tracked; all usage is priced at today's rates.
